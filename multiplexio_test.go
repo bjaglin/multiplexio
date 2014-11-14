@@ -1,9 +1,11 @@
 package multiplexio
 
 import (
+	"bufio"
 	"io"
 	"io/ioutil"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -37,10 +39,18 @@ func readOneByteAtTheTime(src io.Reader, written *int) []byte {
 	return buf[:*written]
 }
 
+func wrapToken(prefix string, token *[]byte, suffix string) {
+	*token = append([]byte(prefix), *token...)
+	*token = append(*token, []byte(suffix)...)
+}
+
 func TestLazyWrappedReaderFetching(t *testing.T) {
 	var (
 		pipeReader, pipeWriter = io.Pipe()
-		reader                 = NewReader(pipeReader)
+		reader                 = NewReader(
+			Options{},
+			Source{Reader: pipeReader},
+		)
 	)
 	go func() {
 		io.WriteString(pipeWriter, line1)
@@ -66,7 +76,10 @@ func TestLazyWrappedReaderFetching(t *testing.T) {
 func TestForwardingSingleSlowReader(t *testing.T) {
 	var (
 		pipeReader, pipeWriter = io.Pipe()
-		reader                 = NewReader(pipeReader)
+		reader                 = NewReader(
+			Options{},
+			Source{Reader: pipeReader},
+		)
 	)
 	go func() {
 		time.Sleep(20 * time.Millisecond)
@@ -87,7 +100,11 @@ func TestForwardingOneSlowerReader(t *testing.T) {
 	var (
 		pipeReader1, pipeWriter1 = io.Pipe()
 		pipeReader2, pipeWriter2 = io.Pipe()
-		reader                   = NewReader(pipeReader1, pipeReader2)
+		reader                   = NewReader(
+			Options{},
+			Source{Reader: pipeReader1},
+			Source{Reader: pipeReader2},
+		)
 	)
 	go func() {
 		io.WriteString(pipeWriter1, line1)
@@ -111,9 +128,12 @@ func TestForwardingOneSlowerReader(t *testing.T) {
 func TestForwardingSingleHangingReader(t *testing.T) {
 	var (
 		pipeReader, pipeWriter = io.Pipe()
-		reader                 = NewReader(pipeReader)
-		written                int
-		doneReading            bool
+		reader                 = NewReader(
+			Options{},
+			Source{Reader: pipeReader},
+		)
+		written     int
+		doneReading bool
 	)
 	go func() {
 		io.WriteString(pipeWriter, line1)
@@ -138,9 +158,14 @@ func TestForwardingOneHangingReader(t *testing.T) {
 		pipeReader1, pipeWriter1 = io.Pipe()
 		pipeReader2, pipeWriter2 = io.Pipe()
 		pipeReader3, _           = io.Pipe()
-		reader                   = NewReader(pipeReader1, pipeReader2, pipeReader3)
-		written                  int
-		doneReading              bool
+		reader                   = NewReader(
+			Options{},
+			Source{Reader: pipeReader1},
+			Source{Reader: pipeReader2},
+			Source{Reader: pipeReader3},
+		)
+		written     int
+		doneReading bool
 	)
 	go func() {
 		io.WriteString(pipeWriter1, line1)
@@ -167,7 +192,10 @@ func TestForwardingOneHangingReader(t *testing.T) {
 func TestForwardingUnfinishedTrailingToken(t *testing.T) {
 	var (
 		pipeReader, pipeWriter = io.Pipe()
-		reader                 = NewReader(pipeReader)
+		reader                 = NewReader(
+			Options{},
+			Source{Reader: pipeReader},
+		)
 	)
 	go func() {
 		io.WriteString(pipeWriter, line1)
@@ -186,8 +214,12 @@ func TestOrderingSequential(t *testing.T) {
 	var (
 		pipeReader1, pipeWriter1 = io.Pipe()
 		pipeReader2, pipeWriter2 = io.Pipe()
-		reader                   = NewReader(pipeReader1, pipeReader2)
-		expected                 = make([]byte, 0, 1024)
+		reader                   = NewReader(
+			Options{},
+			Source{Reader: pipeReader1},
+			Source{Reader: pipeReader2},
+		)
+		expected = make([]byte, 0, 1024)
 	)
 	go func() {
 		// exercise the initial waiting by delaying token
@@ -220,7 +252,11 @@ func TestOrderingInterlaced(t *testing.T) {
 	var (
 		pipeReader1, pipeWriter1 = io.Pipe()
 		pipeReader2, pipeWriter2 = io.Pipe()
-		reader                   = NewReader(pipeReader1, pipeReader2)
+		reader                   = NewReader(
+			Options{},
+			Source{Reader: pipeReader1},
+			Source{Reader: pipeReader2},
+		)
 	)
 	go func() {
 		// exercise the initial waiting by delaying token
@@ -245,6 +281,101 @@ func TestOrderingInterlaced(t *testing.T) {
 		line3,
 		line4,
 		line4,
+	)
+	if !reflect.DeepEqual(actual, expected) {
+		t.Errorf("`%v` read, `%v` expected", string(actual), string(expected))
+	}
+}
+
+func TestCustomSplit(t *testing.T) {
+	var (
+		pipeReader, pipeWriter = io.Pipe()
+		reader                 = NewReader(
+			Options{Split: bufio.ScanWords},
+			Source{Reader: pipeReader},
+		)
+	)
+	go func() {
+		io.WriteString(pipeWriter, "1 2 3")
+		pipeWriter.Close()
+	}()
+	actual := readOneByteAtTheTime(reader, new(int))
+	expected := []byte("1\n2\n3\n")
+	if !reflect.DeepEqual(actual, expected) {
+		t.Errorf("`%v` read, `%v` expected", string(actual), string(expected))
+	}
+}
+
+func TestCustomLess(t *testing.T) {
+	var (
+		ByDescLenLess            = func(i, j []byte) bool { return len(i) > len(j) }
+		pipeReader1, pipeWriter1 = io.Pipe()
+		pipeReader2, pipeWriter2 = io.Pipe()
+		reader                   = NewReader(
+			Options{Less: ByDescLenLess},
+			Source{Reader: pipeReader1},
+			Source{Reader: pipeReader2},
+		)
+	)
+	go func() {
+		// exercise the initial waiting by delaying token
+		// availability in the stream that should come first
+		time.Sleep(20 * time.Millisecond)
+		io.WriteString(pipeWriter1, line3)
+		io.WriteString(pipeWriter1, line1)
+		io.WriteString(pipeWriter1, line1)
+		pipeWriter1.Close()
+	}()
+	go func() {
+		io.WriteString(pipeWriter2, line4)
+		io.WriteString(pipeWriter2, line4)
+		io.WriteString(pipeWriter2, line2)
+		pipeWriter2.Close()
+	}()
+	actual := readOneByteAtTheTime(reader, new(int))
+	expected := concatenatedStringsAsBytes(
+		line4,
+		line4,
+		line3,
+		line2,
+		line1,
+		line1,
+	)
+	if !reflect.DeepEqual(actual, expected) {
+		t.Errorf("`%v` read, `%v` expected", string(actual), string(expected))
+	}
+}
+
+func TestCustomTransformers(t *testing.T) {
+	var (
+		pipeReader1, pipeWriter1 = io.Pipe()
+		Transform1               = func(token *[]byte) { wrapToken("SOURCE1<", token, ">\n") }
+		pipeReader2, pipeWriter2 = io.Pipe()
+		Transform2               = func(token *[]byte) { wrapToken("SOURCE2<", token, ">\n") }
+		reader                   = NewReader(
+			Options{},
+			Source{pipeReader1, Transform1},
+			Source{pipeReader2, Transform2},
+		)
+	)
+	go func() {
+		// exercise the initial waiting by delaying token
+		// availability in the stream that should come first
+		io.WriteString(pipeWriter1, line1)
+		pipeWriter1.Close()
+	}()
+	go func() {
+		io.WriteString(pipeWriter2, line2)
+		pipeWriter2.Close()
+	}()
+	actual := readOneByteAtTheTime(reader, new(int))
+	expected := concatenatedStringsAsBytes(
+		"SOURCE1<",
+		strings.Trim(line1, "\n"),
+		">\n",
+		"SOURCE2<",
+		strings.Trim(line2, "\n"),
+		">\n",
 	)
 	if !reflect.DeepEqual(actual, expected) {
 		t.Errorf("`%v` read, `%v` expected", string(actual), string(expected))
