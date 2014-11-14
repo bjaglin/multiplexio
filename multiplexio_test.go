@@ -39,11 +39,6 @@ func readOneByteAtTheTime(src io.Reader, written *int) []byte {
 	return buf[:*written]
 }
 
-func wrapToken(prefix string, token *[]byte, suffix string) {
-	*token = append([]byte(prefix), *token...)
-	*token = append(*token, []byte(suffix)...)
-}
-
 func TestLazyWrappedReaderFetching(t *testing.T) {
 	var (
 		pipeReader, pipeWriter = io.Pipe()
@@ -346,16 +341,16 @@ func TestCustomLess(t *testing.T) {
 	}
 }
 
-func TestCustomTransformers(t *testing.T) {
+func TestCustomWriters(t *testing.T) {
 	var (
 		pipeReader1, pipeWriter1 = io.Pipe()
-		Transform1               = func(token *[]byte) { wrapToken("ZZZZ<", token, ">\n") }
+		Write1                   = func(dest io.Writer, token []byte) (n int, err error) { return io.WriteString(dest, "ZZZZ<" + string(token) + ">\n") }
 		pipeReader2, pipeWriter2 = io.Pipe()
-		Transform2               = func(token *[]byte) { wrapToken("AAAA<", token, ">\n") }
+		Write2                   = func(dest io.Writer, token []byte) (n int, err error) { return io.WriteString(dest, "AAAA<" + string(token) + ">\n") }
 		reader                   = NewReader(
 			Options{},
-			Source{pipeReader1, Transform1},
-			Source{pipeReader2, Transform2},
+			Source{pipeReader1, Write1},
+			Source{pipeReader2, Write2},
 		)
 	)
 	go func() {
@@ -369,8 +364,8 @@ func TestCustomTransformers(t *testing.T) {
 		pipeWriter2.Close()
 	}()
 	actual := readOneByteAtTheTime(reader, new(int))
-	// Transform2's prefix is "before" Transform1's but it
-        // must not affect affect ordering
+	// Write2's prefix is "before" Write1's but it must not affect
+	// affect ordering
 	expected := concatenatedStringsAsBytes(
 		"ZZZZ<",
 		strings.Trim(line1, "\n"),

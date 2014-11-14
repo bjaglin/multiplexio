@@ -13,8 +13,8 @@ import (
 // NewReader returns an io.ReadCloser aggregating, according to a given
 // ordering, tokens extracted concurrently from a set of io.Reader
 // wrapped in a set of Source. Tokens of a specific io.Reader go through
-// the Transform function passed together wih that io.Reader in the
-// Source struct, or NewLineTransform if it isn't set.
+// the Write function passed together wih that io.Reader in the
+// Source struct, or WriteNewLine if it isn't set.
 //
 // By the corresponding functions are not passed in Options,
 // bufio.ScanLines is used for scanning and extracting tokens from the
@@ -47,19 +47,19 @@ func NewReader(options Options, sources ...Source) io.ReadCloser {
 		var (
 			scanSemaphore = make(chan struct{})
 			scanner       = bufio.NewScanner(source.Reader)
-			transform     = source.Transform
+			write         = source.Write
 		)
-		if transform == nil {
-			transform = NewLineTransform
+		if write == nil {
+			write = WriteNewLine
 		}
 		scanner.Split(split)
 		for scanner.Scan() {
-			// send the transformed bytes along with a semaphore to
+			// send the raw bytes along with a semaphore to
 			// let the main goroutine throttle the scanning
 			ch <- sourceToken{
 				bytes:         scanner.Bytes(),
 				scanSemaphore: scanSemaphore,
-				transform:     transform,
+				write:         write,
 			}
 			// block until we are asked to consume more
 			<-scanSemaphore
@@ -108,8 +108,7 @@ func NewReader(options Options, sources ...Source) io.ReadCloser {
 				// extract the tail from the sorted list
 				sourceToken := extractTail(&sourceTokens)
 				// dump the bytes, blocking until they are consumed
-				sourceToken.transform(&sourceToken.bytes)
-				if _, err := pipeWriter.Write(sourceToken.bytes); err != nil {
+				if _, err := sourceToken.write(pipeWriter, sourceToken.bytes); err != nil {
 					// TODO: gracefully cleanup reader2chan goroutines? close semaphores?
 					close(ch)
 					break
@@ -127,16 +126,16 @@ func NewReader(options Options, sources ...Source) io.ReadCloser {
 }
 
 // Source combines an io.Reader from which tokens will be extracted with
-// the Transform function that will process them before they make it
-// into the aggregated stream.
+// the Write function that will format them and dump them into the aggregated
+// stream.
 type Source struct {
-	Reader    io.Reader           // incoming stream
-	Transform func(token *[]byte) // function used for transforming extracted tokens
+	Reader io.Reader                                             // incoming stream
+	Write  func(dest io.Writer, token []byte) (n int, err error) // function used for formatting and dumping extracted tokens
 }
 
-// Implementation of Source.Transformer adding a line break after each token
-func NewLineTransform(token *[]byte) {
-	*token = append(*token, byte('\n'))
+// Implementation of Source.Write adding a line break after each token
+func WriteNewLine(dest io.Writer, token []byte) (n int, err error) {
+	return dest.Write(append(token, byte('\n')))
 }
 
 // Options are the options for creating a new Reader.
@@ -153,7 +152,7 @@ func ByStringLess(i, j []byte) bool {
 type sourceToken struct {
 	bytes         []byte
 	scanSemaphore chan struct{}
-	transform     func(token *[]byte)
+	write         func(dest io.Writer, token []byte) (n int, err error)
 }
 
 type byTokenSort struct {
