@@ -349,9 +349,9 @@ func TestCustomLess(t *testing.T) {
 func TestCustomTransformers(t *testing.T) {
 	var (
 		pipeReader1, pipeWriter1 = io.Pipe()
-		Transform1               = func(token *[]byte) { wrapToken("SOURCE1<", token, ">\n") }
+		Transform1               = func(token *[]byte) { wrapToken("ZZZZ<", token, ">\n") }
 		pipeReader2, pipeWriter2 = io.Pipe()
-		Transform2               = func(token *[]byte) { wrapToken("SOURCE2<", token, ">\n") }
+		Transform2               = func(token *[]byte) { wrapToken("AAAA<", token, ">\n") }
 		reader                   = NewReader(
 			Options{},
 			Source{pipeReader1, Transform1},
@@ -369,11 +369,13 @@ func TestCustomTransformers(t *testing.T) {
 		pipeWriter2.Close()
 	}()
 	actual := readOneByteAtTheTime(reader, new(int))
+	// Transform2's prefix is "before" Transform1's but it
+        // must not affect affect ordering
 	expected := concatenatedStringsAsBytes(
-		"SOURCE1<",
+		"ZZZZ<",
 		strings.Trim(line1, "\n"),
 		">\n",
-		"SOURCE2<",
+		"AAAA<",
 		strings.Trim(line2, "\n"),
 		">\n",
 	)

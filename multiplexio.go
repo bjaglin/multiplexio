@@ -54,13 +54,12 @@ func NewReader(options Options, sources ...Source) io.ReadCloser {
 		}
 		scanner.Split(split)
 		for scanner.Scan() {
-			bytes := scanner.Bytes()
-			transform(&bytes)
 			// send the transformed bytes along with a semaphore to
 			// let the main goroutine throttle the scanning
 			ch <- sourceToken{
-				bytes:         bytes,
+				bytes:         scanner.Bytes(),
 				scanSemaphore: scanSemaphore,
+				transform:     transform,
 			}
 			// block until we are asked to consume more
 			<-scanSemaphore
@@ -109,6 +108,7 @@ func NewReader(options Options, sources ...Source) io.ReadCloser {
 				// extract the tail from the sorted list
 				sourceToken := extractTail(&sourceTokens)
 				// dump the bytes, blocking until they are consumed
+				sourceToken.transform(&sourceToken.bytes)
 				if _, err := pipeWriter.Write(sourceToken.bytes); err != nil {
 					// TODO: gracefully cleanup reader2chan goroutines? close semaphores?
 					close(ch)
@@ -153,6 +153,7 @@ func ByStringLess(i, j []byte) bool {
 type sourceToken struct {
 	bytes         []byte
 	scanSemaphore chan struct{}
+	transform     func(token *[]byte)
 }
 
 type byTokenSort struct {
