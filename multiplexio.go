@@ -1,3 +1,6 @@
+// Package multiplexio exposes structs implementing and wrapping
+// canonical I/O interfaces, allowing aggregation in a real time
+// fashion.
 package multiplexio
 
 import (
@@ -8,7 +11,11 @@ import (
 )
 
 // Reader aggregating, according to a given ordering, tokens extracted
-// concurrently from a set of io.Reader
+// concurrently from a set of io.Reader.
+//
+// bufio.ScanLines is used for scanning and extracting tokens from the wrapped
+// streams, and sort.StringSlice is invoked for ordering these tokens across the
+// available streams.
 type Reader struct {
 	io.ReadCloser
 }
