@@ -37,10 +37,6 @@ func readOneByteAtTheTime(src io.Reader, written *int) []byte {
 	return buf[:*written]
 }
 
-func TestReaderInterfaces(t *testing.T) {
-	var _ io.ReadCloser = NewReader()
-}
-
 func TestLazyWrappedReaderFetching(t *testing.T) {
 	var (
 		pipeReader, pipeWriter = io.Pipe()

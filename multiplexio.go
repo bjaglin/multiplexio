@@ -10,7 +10,7 @@ import (
 // Reader aggregating, according to a given ordering, tokens extracted
 // concurrently from a set of io.Reader
 type Reader struct {
-	pipeReader *io.PipeReader
+	io.ReadCloser
 }
 
 type extractedToken struct {
@@ -130,12 +130,4 @@ func NewReader(readers ...io.Reader) *Reader {
 	}()
 
 	return &Reader{pipeReader}
-}
-
-func (mr *Reader) Read(p []byte) (n int, err error) {
-	return mr.pipeReader.Read(p)
-}
-
-func (mr *Reader) Close() error {
-	return mr.pipeReader.Close()
 }
