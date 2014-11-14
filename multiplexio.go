@@ -106,10 +106,8 @@ func NewReader(options Options, sources ...Source) io.ReadCloser {
 			if len(sourceTokens) > 0 {
 				// sort to get the token we want at the tail
 				sort.Sort(byTokenSort{less, &sourceTokens})
-				// get the tail of the list
-				sourceToken := sourceTokens[len(sourceTokens)-1]
-				// strip that tail for the next run
-				sourceTokens = sourceTokens[0 : len(sourceTokens)-1]
+				// extract the tail from the sorted list
+				sourceToken := extractTail(&sourceTokens)
 				// dump the bytes, blocking until they are consumed
 				if _, err := pipeWriter.Write(sourceToken.bytes); err != nil {
 					// TODO: gracefully cleanup reader2chan goroutines? close semaphores?
@@ -170,4 +168,11 @@ func (b byTokenSort) Swap(i, j int) {
 }
 func (b byTokenSort) Less(i, j int) bool {
 	return !b.less((*b.tokens)[i].bytes, (*b.tokens)[j].bytes)
+}
+
+func extractTail(sourceTokens *[]sourceToken) sourceToken {
+	l := len(*sourceTokens)
+	tail := (*sourceTokens)[l-1]
+	*sourceTokens = (*sourceTokens)[0 : l-1]
+	return tail
 }
