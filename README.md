@@ -1,7 +1,7 @@
 multiplexio
 ===========
 
-I/O wrappers for aggregating streams in a real-time fashion.
+Go library providing I/O wrappers for aggregating streams.
 
 [![Build Status](https://travis-ci.org/bjaglin/multiplexio.svg?branch=master)](https://travis-ci.org/bjaglin/multiplexio)
 

@@ -1,6 +1,6 @@
 // Package multiplexio exposes structs implementing and wrapping
-// canonical I/O interfaces, allowing aggregation in a real time
-// fashion.
+// canonical I/O interfaces to tokenize, process and aggregate
+// them with custom functions.
 package multiplexio
 
 import (
@@ -12,11 +12,11 @@ import (
 
 // NewReader returns an io.ReadCloser aggregating, according to a given
 // ordering, tokens extracted concurrently from a set of io.Reader
-// wrapped in a set of Source. Tokens of a specific io.Reader go through
-// the Write function passed together wih that io.Reader in the
-// Source struct, or WriteNewLine if it isn't set.
+// wrapped in a set of Source. Tokens of a given io.Reader go through
+// the Write function passed together in the Source struct, or
+// WriteNewLine if it is not set.
 //
-// By the corresponding functions are not passed in Options,
+// If the corresponding functions are not passed in Options,
 // bufio.ScanLines is used for scanning and extracting tokens from the
 // wrapped io.Reader objects, and ByStringLess is invoked for defining
 // the order of these onto the aggregated stream.
@@ -133,7 +133,7 @@ type Source struct {
 	Write  func(dest io.Writer, token []byte) (n int, err error) // function used for formatting and dumping extracted tokens
 }
 
-// Implementation of Source.Write adding a line break after each token
+// Implementation of Source.Write adding a line break after each token.
 func WriteNewLine(dest io.Writer, token []byte) (n int, err error) {
 	return dest.Write(append(token, byte('\n')))
 }
@@ -144,7 +144,7 @@ type Options struct {
 	Less  func(i, j []byte) bool // function used for ordering extracted tokens, with sort.Interface.Less semantics
 }
 
-// Implementation of Options.Less using the canonical string ordering
+// Implementation of Options.Less using the alphabetical string ordering.
 func ByStringLess(i, j []byte) bool {
 	return string(i) < string(j)
 }
