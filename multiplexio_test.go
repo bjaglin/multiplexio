@@ -349,8 +349,8 @@ func TestCustomWriters(t *testing.T) {
 		Write2                   = func(dest io.Writer, token []byte) (n int, err error) { return io.WriteString(dest, "AAAA<" + string(token) + ">\n") }
 		reader                   = NewReader(
 			Options{},
-			Source{pipeReader1, Write1},
-			Source{pipeReader2, Write2},
+			Source{Reader: pipeReader1, Write: Write1},
+			Source{Reader: pipeReader2, Write: Write2},
 		)
 	)
 	go func() {
