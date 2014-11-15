@@ -4,6 +4,7 @@ multiplexio
 Go library providing I/O wrappers for aggregating streams.
 
 [![Build Status](https://travis-ci.org/bjaglin/multiplexio.svg?branch=master)](https://travis-ci.org/bjaglin/multiplexio)
+[![GoDoc](https://godoc.org/github.com/bjaglin/multiplexio?status.svg)](https://godoc.org/github.com/bjaglin/multiplexio)
 
 ## Usage
 
