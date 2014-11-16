@@ -385,11 +385,13 @@ func TestOrderingSlowReaders(t *testing.T) {
 	)
 	go func() {
 		io.WriteString(pipeWriter1, line1)
-		io.WriteString(pipeWriter2, line1)
-		io.WriteString(pipeWriter2, line3)
 		time.Sleep(timeout / 2)
 		io.WriteString(pipeWriter1, line2)
 		pipeWriter1.Close()
+	}()
+	go func() {
+		io.WriteString(pipeWriter2, line1)
+		io.WriteString(pipeWriter2, line3)
 		pipeWriter2.Close()
 	}()
 	actual := readOneByteAtTheTime(reader, new(int))
@@ -437,6 +439,40 @@ func TestOrderingVerySlowReaders(t *testing.T) {
 	)
 	if !reflect.DeepEqual(actual, expected) {
 		t.Errorf("`%v` read, `%v` expected", string(actual), string(expected))
+	}
+}
+
+// Verify that the overall rate should not be limited by slow readers, once
+// their timeout was exceeded once
+func TestTimeoutsAreBySource(t *testing.T) {
+	var (
+		pipeReader1, pipeWriter1 = io.Pipe() // fast
+		pipeReader2, pipeWriter2 = io.Pipe() // fast initial token, and then hangs
+		pipeReader3, _           = io.Pipe() // hangs from the beginning
+		reader                   = NewReader(
+			Options{},
+			Source{Reader: pipeReader1},
+			Source{Reader: pipeReader2},
+			Source{Reader: pipeReader3},
+		)
+		written int
+	)
+	go func() {
+		io.WriteString(pipeWriter1, line1)
+		io.WriteString(pipeWriter1, line2)
+		io.WriteString(pipeWriter1, line3)
+	}()
+	go func() {
+		io.WriteString(pipeWriter2, line1)
+	}()
+	go func() {
+		readOneByteAtTheTime(reader, &written)
+	}()
+	blockingTime := firstTimeout + timeout
+	time.Sleep(blockingTime + timeout/2) // add some margin
+	expected := len(line1 + line1 + line2 + line3)
+	if written != expected {
+		t.Errorf("%v bytes copied, %v expected", written, expected)
 	}
 }
 

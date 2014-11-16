@@ -48,18 +48,25 @@ func NewReader(options Options, sources ...Source) io.ReadCloser {
 	// the main goroutine via the channel
 	source2chan := func(source Source) {
 		var (
+			// an id consistent across tokens forwarded to the channel
+			id = struct{}{}
+
+			// a chan used as a semaphore to throttle the scanning loop
 			scanSemaphore = make(chan struct{})
-			scanner       = bufio.NewScanner(source.Reader)
-			write         = source.Write
+
+			// the object extracting tokens
+			scanner = bufio.NewScanner(source.Reader)
+
+			// the function that will format and forward the tokens
+			write = source.Write
 		)
 		if write == nil {
 			write = WriteNewLine
 		}
 		scanner.Split(split)
 		for scanner.Scan() {
-			// send the raw bytes along with a semaphore to
-			// let the main goroutine throttle the scanning
 			ch <- sourceToken{
+				sourceId:      id,
 				bytes:         scanner.Bytes(),
 				scanSemaphore: scanSemaphore,
 				write:         write,
@@ -68,7 +75,7 @@ func NewReader(options Options, sources ...Source) io.ReadCloser {
 			<-scanSemaphore
 		}
 		// signal that there is nothing else coming from that routine
-		ch <- sourceToken{}
+		ch <- sourceToken{sourceId: id}
 		// TODO: better error handling: check scanner.Err()
 	}
 	for _, source := range sources {
@@ -78,31 +85,56 @@ func NewReader(options Options, sources ...Source) io.ReadCloser {
 	// goroutine feeding into PipeWriter as tokens arrive
 	go func() {
 		var (
-			scanning     = len(sources)
+			// current number of sources that have not EOFed and are actively scanning
+			scanning = len(sources)
+
+			// extracted tokens, candidate for sorting/forwarding
 			sourceTokens = make([]sourceToken, 0, len(sources))
-			blockMax     = firstTimeout
+
+			// the ids for the sources being actively scanned, which have previously returned a token within timeout
+			activeSourcesWithinTimeout = make(map[interface{}]bool)
+
+			// the max duration we are willing to wait for tokens
+			blockMax = firstTimeout
 		)
 		for scanning != 0 {
 			var (
-				timeoutOccured = false
-				tokenTimer     = time.After(blockMax)
+				stopWaiting = false
+				tokenTimer  = time.After(blockMax)
 			)
-			for scanning != 0 && !timeoutOccured {
+			for scanning != 0 && !stopWaiting {
 				timer := tokenTimer
 				if len(sourceTokens) == 0 {
-					// nothing is extracted yet so we need that token to do
-					// anything, so no need for timeout that would result in
+					// nothing is extracted yet so we need at least a token to do
+					// anything, so no need for any timeout that would result in
 					// busy-polling
 					timer = nil
 				}
 				select {
 				case sourceToken, ok := <-ch:
-					if ok && sourceToken.scanSemaphore != nil {
-						sourceTokens = append(sourceTokens, sourceToken)
+					if ok {
+						if sourceToken.scanSemaphore != nil {
+							// candidate for being forwarded, put it in the list to be sorted
+							sourceTokens = append(sourceTokens, sourceToken)
+						}
+						if _, ok := activeSourcesWithinTimeout[sourceToken.sourceId]; ok {
+							// that source won't be active until we trigger the semaphore again
+							delete(activeSourcesWithinTimeout, sourceToken.sourceId)
+							if len(activeSourcesWithinTimeout) == 0 {
+								// at this point, there is no source actively scanning which
+								// did not already timeout so waiting more would mean that we
+								// effectively give them a higher timeout, and decrease the
+								// overall throughput, so just break out
+								stopWaiting = true
+							}
+						}
 					}
 					scanning--
 				case <-timer:
-					timeoutOccured = true
+					// If we hit a timeout, that means all sources have been given
+					// the time to answer
+					activeSourcesWithinTimeout = make(map[interface{}]bool)
+					stopWaiting = true
 				}
 			}
 			if len(sourceTokens) > 0 {
@@ -116,8 +148,10 @@ func NewReader(options Options, sources ...Source) io.ReadCloser {
 					close(ch)
 					break
 				}
-				// signal that we want more data from the scanner we got that token from
+				// signal that we want more data from the source we got that token from
 				sourceToken.scanSemaphore <- struct{}{}
+				// which makes it a source actively scanning
+				activeSourcesWithinTimeout[sourceToken.sourceId] = true
 				scanning++
 			}
 			blockMax = timeout
@@ -153,6 +187,7 @@ func ByStringLess(i, j []byte) bool {
 }
 
 type sourceToken struct {
+	sourceId      interface{}
 	bytes         []byte
 	scanSemaphore chan struct{}
 	write         func(dest io.Writer, token []byte) (n int, err error)
