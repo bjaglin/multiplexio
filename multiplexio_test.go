@@ -10,6 +10,11 @@ import (
 	"time"
 )
 
+func init() {
+	firstTimeout = 100 * time.Millisecond
+	timeout = 10 * time.Millisecond
+}
+
 const (
 	line1          = "1 foo\n"
 	line2          = "2 barbar\n"
@@ -59,7 +64,8 @@ func TestLazyWrappedReaderFetching(t *testing.T) {
 		// asking for one byte should consume only one more token
 		io.CopyN(ioutil.Discard, reader, 1)
 	}()
-	time.Sleep(20 * time.Millisecond)
+	// independently of our timeouts, give enough time to CopyN to block
+	time.Sleep(10 * time.Millisecond)
 	unconsumed, _ := io.Copy(ioutil.Discard, pipeReader)
 	// leaving one token that we had no reason to fetch
 	expected := int64(len(line1))
@@ -77,11 +83,11 @@ func TestForwardingSingleSlowReader(t *testing.T) {
 		)
 	)
 	go func() {
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(2 * firstTimeout)
 		io.WriteString(pipeWriter, line1)
-		time.Sleep(time.Second)
+		time.Sleep(2 * timeout)
 		io.WriteString(pipeWriter, line2)
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(2 * timeout)
 		pipeWriter.Close()
 	}()
 	written, _ := io.Copy(ioutil.Discard, reader)
@@ -107,10 +113,11 @@ func TestForwardingOneSlowerReader(t *testing.T) {
 	}()
 	go func() {
 		io.WriteString(pipeWriter2, line2)
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(2 * timeout)
 		io.WriteString(pipeWriter2, line3)
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(2 * timeout)
 		io.WriteString(pipeWriter2, line4)
+		time.Sleep(2 * timeout)
 		pipeWriter2.Close()
 	}()
 	written, _ := io.Copy(ioutil.Discard, reader)
@@ -138,7 +145,7 @@ func TestForwardingSingleHangingReader(t *testing.T) {
 		readOneByteAtTheTime(reader, &written)
 		doneReading = true
 	}()
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(2 * timeout)
 	expected := len(line1)
 	if written != expected {
 		t.Errorf("%v bytes copied, %v expected", written, expected)
@@ -174,7 +181,7 @@ func TestForwardingOneHangingReader(t *testing.T) {
 		readOneByteAtTheTime(reader, &written)
 		doneReading = true
 	}()
-	time.Sleep(time.Second + 20*time.Millisecond)
+	time.Sleep(2 * firstTimeout)
 	expected := len(line1 + line2)
 	if written != expected {
 		t.Errorf("%v bytes copied, %v expected", written, expected)
@@ -219,7 +226,7 @@ func TestOrderingSequential(t *testing.T) {
 	go func() {
 		// exercise the initial waiting by delaying token
 		// availability in the stream that should come first
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(firstTimeout/2)
 		for i := 0; i < 10; i++ {
 			io.WriteString(pipeWriter1, line1)
 		}
@@ -256,7 +263,7 @@ func TestOrderingInterlaced(t *testing.T) {
 	go func() {
 		// exercise the initial waiting by delaying token
 		// availability in the stream that should come first
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(firstTimeout/2)
 		io.WriteString(pipeWriter1, line1)
 		io.WriteString(pipeWriter1, line1)
 		io.WriteString(pipeWriter1, line3)
@@ -315,7 +322,7 @@ func TestCustomLess(t *testing.T) {
 	go func() {
 		// exercise the initial waiting by delaying token
 		// availability in the stream that should come first
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(firstTimeout/2)
 		io.WriteString(pipeWriter1, line3)
 		io.WriteString(pipeWriter1, line1)
 		io.WriteString(pipeWriter1, line1)
@@ -344,10 +351,14 @@ func TestCustomLess(t *testing.T) {
 func TestCustomWriters(t *testing.T) {
 	var (
 		pipeReader1, pipeWriter1 = io.Pipe()
-		Write1                   = func(dest io.Writer, token []byte) (n int, err error) { return io.WriteString(dest, "ZZZZ<" + string(token) + ">\n") }
+		Write1                   = func(dest io.Writer, token []byte) (n int, err error) {
+			return io.WriteString(dest, "ZZZZ<"+string(token)+">\n")
+		}
 		pipeReader2, pipeWriter2 = io.Pipe()
-		Write2                   = func(dest io.Writer, token []byte) (n int, err error) { return io.WriteString(dest, "AAAA<" + string(token) + ">\n") }
-		reader                   = NewReader(
+		Write2                   = func(dest io.Writer, token []byte) (n int, err error) {
+			return io.WriteString(dest, "AAAA<"+string(token)+">\n")
+		}
+		reader = NewReader(
 			Options{},
 			Source{Reader: pipeReader1, Write: Write1},
 			Source{Reader: pipeReader2, Write: Write2},

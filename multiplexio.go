@@ -10,6 +10,11 @@ import (
 	"time"
 )
 
+var (
+	firstTimeout = time.Second      // how long do we wait for an initial token from each reader?
+	timeout      = time.Millisecond // how long do we wait for tokens after at least one reader produced one?
+)
+
 // NewReader returns an io.ReadCloser aggregating, according to a given
 // ordering, tokens extracted concurrently from a set of io.Reader
 // wrapped in a set of Source. Tokens of a given io.Reader go through
@@ -23,10 +28,8 @@ import (
 func NewReader(options Options, sources ...Source) io.ReadCloser {
 	// configuration
 	var (
-		firstTimeout = time.Second      // how long do we wait for an initial token from each reader?
-		timeout      = time.Millisecond // how long do we wait for tokens after at least one reader produced one?
-		split        = bufio.ScanLines  // tokenizing function
-		less         = ByStringLess     // sorting function defining which token gets out first
+		split = bufio.ScanLines // tokenizing function
+		less  = ByStringLess    // sorting function defining which token gets out first
 	)
 	if options.Split != nil {
 		split = options.Split
