@@ -44,6 +44,7 @@ func readOneByteAtTheTime(src io.Reader, written *int) []byte {
 	return buf[:*written]
 }
 
+// Ensure data is read from sources only when necessary
 func TestLazyWrappedReaderFetching(t *testing.T) {
 	var (
 		pipeReader, pipeWriter = io.Pipe()
@@ -74,7 +75,9 @@ func TestLazyWrappedReaderFetching(t *testing.T) {
 	}
 }
 
-func TestForwardingSingleSlowReader(t *testing.T) {
+// Verify that a single reader so slow that it triggers all timeouts
+// is forwarded correctly
+func TestForwardingSingleVerySlowReader(t *testing.T) {
 	var (
 		pipeReader, pipeWriter = io.Pipe()
 		reader                 = NewReader(
@@ -97,7 +100,9 @@ func TestForwardingSingleSlowReader(t *testing.T) {
 	}
 }
 
-func TestForwardingOneSlowerReader(t *testing.T) {
+// Verify that one reader which is slow but within the read timeouts doesn't
+// affect forwarding
+func TestForwardingOneSlowReader(t *testing.T) {
 	var (
 		pipeReader1, pipeWriter1 = io.Pipe()
 		pipeReader2, pipeWriter2 = io.Pipe()
@@ -110,23 +115,51 @@ func TestForwardingOneSlowerReader(t *testing.T) {
 	go func() {
 		io.WriteString(pipeWriter1, line1)
 		pipeWriter1.Close()
-	}()
-	go func() {
+		time.Sleep(firstTimeout / 2)
 		io.WriteString(pipeWriter2, line2)
-		time.Sleep(2 * timeout)
+		time.Sleep(timeout / 2)
 		io.WriteString(pipeWriter2, line3)
-		time.Sleep(2 * timeout)
-		io.WriteString(pipeWriter2, line4)
-		time.Sleep(2 * timeout)
+		time.Sleep(timeout / 2)
 		pipeWriter2.Close()
 	}()
 	written, _ := io.Copy(ioutil.Discard, reader)
-	expected := int64(len(line1 + line2 + line3 + line4))
+	expected := int64(len(line1 + line2 + line3))
 	if written != expected {
 		t.Errorf("%v bytes copied, %v expected", written, expected)
 	}
 }
 
+// Verify that one reader which is so slow that it triggers the timeouts
+// doesn't affect forwarding
+func TestForwardingOneVerySlowReader(t *testing.T) {
+	var (
+		pipeReader1, pipeWriter1 = io.Pipe()
+		pipeReader2, pipeWriter2 = io.Pipe()
+		reader                   = NewReader(
+			Options{},
+			Source{Reader: pipeReader1},
+			Source{Reader: pipeReader2},
+		)
+	)
+	go func() {
+		io.WriteString(pipeWriter1, line1)
+		pipeWriter1.Close()
+		time.Sleep(2 * firstTimeout)
+		io.WriteString(pipeWriter2, line2)
+		time.Sleep(2 * timeout)
+		io.WriteString(pipeWriter2, line3)
+		time.Sleep(2 * timeout)
+		pipeWriter2.Close()
+	}()
+	written, _ := io.Copy(ioutil.Discard, reader)
+	expected := int64(len(line1 + line2 + line3))
+	if written != expected {
+		t.Errorf("%v bytes copied, %v expected", written, expected)
+	}
+}
+
+// Verify that data from a reader which is not closed is forwarded correctly
+// and that the aggregated reader blocks
 func TestForwardingSingleHangingReader(t *testing.T) {
 	var (
 		pipeReader, pipeWriter = io.Pipe()
@@ -155,6 +188,8 @@ func TestForwardingSingleHangingReader(t *testing.T) {
 	}
 }
 
+// Verify that data from one reader which is not closed is forwarded correctly
+// and that the aggregated reader blocks
 func TestForwardingOneHangingReader(t *testing.T) {
 	var (
 		pipeReader1, pipeWriter1 = io.Pipe()
@@ -172,8 +207,6 @@ func TestForwardingOneHangingReader(t *testing.T) {
 	go func() {
 		io.WriteString(pipeWriter1, line1)
 		pipeWriter1.Close()
-	}()
-	go func() {
 		io.WriteString(pipeWriter2, line2)
 		pipeWriter2.Close()
 	}()
@@ -191,27 +224,10 @@ func TestForwardingOneHangingReader(t *testing.T) {
 	}
 }
 
-func TestForwardingUnfinishedTrailingToken(t *testing.T) {
-	var (
-		pipeReader, pipeWriter = io.Pipe()
-		reader                 = NewReader(
-			Options{},
-			Source{Reader: pipeReader},
-		)
-	)
-	go func() {
-		io.WriteString(pipeWriter, line1)
-		io.WriteString(pipeWriter, line2)
-		io.WriteString(pipeWriter, unfinishedLine)
-		pipeWriter.Close()
-	}()
-	written, _ := io.Copy(ioutil.Discard, reader)
-	expectedAtLeast := int64(len(line1 + line2))
-	if written < expectedAtLeast {
-		t.Errorf("%v bytes copied, at least %v expected", written, expectedAtLeast)
-	}
-}
-
+// Verify that a high volume, high frequency stream of tokens
+// that should be ordered last does not take precedence over
+// a low volume, low frequency stream of tokens that should
+// be ordered first
 func TestOrderingSequential(t *testing.T) {
 	var (
 		pipeReader1, pipeWriter1 = io.Pipe()
@@ -226,9 +242,10 @@ func TestOrderingSequential(t *testing.T) {
 	go func() {
 		// exercise the initial waiting by delaying token
 		// availability in the stream that should come first
-		time.Sleep(firstTimeout/2)
+		time.Sleep(firstTimeout / 2)
 		for i := 0; i < 10; i++ {
 			io.WriteString(pipeWriter1, line1)
+			time.Sleep(timeout / 2)
 		}
 		pipeWriter1.Close()
 	}()
@@ -250,6 +267,8 @@ func TestOrderingSequential(t *testing.T) {
 	}
 }
 
+// Ensure tokens from a low frequency stream can be interlaced with the ones
+// from a high frequency stream
 func TestOrderingInterlaced(t *testing.T) {
 	var (
 		pipeReader1, pipeWriter1 = io.Pipe()
@@ -263,9 +282,11 @@ func TestOrderingInterlaced(t *testing.T) {
 	go func() {
 		// exercise the initial waiting by delaying token
 		// availability in the stream that should come first
-		time.Sleep(firstTimeout/2)
+		time.Sleep(firstTimeout / 2)
 		io.WriteString(pipeWriter1, line1)
+		time.Sleep(timeout / 2)
 		io.WriteString(pipeWriter1, line1)
+		time.Sleep(timeout / 2)
 		io.WriteString(pipeWriter1, line3)
 		pipeWriter1.Close()
 	}()
@@ -289,6 +310,137 @@ func TestOrderingInterlaced(t *testing.T) {
 	}
 }
 
+// Verify that a stream for which the first token is slow to get but within
+// the timeout is multiplexed correctly with a faster stream
+func TestOrderingOneSlowStartReader(t *testing.T) {
+	var (
+		pipeReader1, pipeWriter1 = io.Pipe()
+		pipeReader2, pipeWriter2 = io.Pipe()
+		reader                   = NewReader(
+			Options{},
+			Source{Reader: pipeReader1},
+			Source{Reader: pipeReader2},
+		)
+	)
+	go func() {
+		io.WriteString(pipeWriter2, line2)
+		pipeWriter2.Close()
+		time.Sleep(firstTimeout / 2)
+		io.WriteString(pipeWriter1, line1)
+		pipeWriter1.Close()
+	}()
+	actual := readOneByteAtTheTime(reader, new(int))
+	expected := concatenatedStringsAsBytes(
+		line1,
+		line2,
+	)
+	if !reflect.DeepEqual(actual, expected) {
+		t.Errorf("`%v` read, `%v` expected", string(actual), string(expected))
+	}
+}
+
+// Verify that the aggregated stream does not wait for a stream which is so
+// slow to extract a first token that it exceeds the timeout
+func TestOrderingOneVerySlowStartReader(t *testing.T) {
+	var (
+		pipeReader1, pipeWriter1 = io.Pipe()
+		pipeReader2, pipeWriter2 = io.Pipe()
+		reader                   = NewReader(
+			Options{},
+			Source{Reader: pipeReader1},
+			Source{Reader: pipeReader2},
+		)
+	)
+	go func() {
+		io.WriteString(pipeWriter2, line2)
+		pipeWriter2.Close()
+		// if the reader is very slow, ordering
+		// will not be guaranteed as we need to
+		// move on
+		time.Sleep(2 * firstTimeout)
+		io.WriteString(pipeWriter1, line1)
+		pipeWriter1.Close()
+	}()
+	actual := readOneByteAtTheTime(reader, new(int))
+	expected := concatenatedStringsAsBytes(
+		line2,
+		line1,
+	)
+	if !reflect.DeepEqual(actual, expected) {
+		t.Errorf("`%v` read, `%v` expected", string(actual), string(expected))
+	}
+}
+
+// Verify that a stream for which the tokens are slow to get but within the
+// timeout is multiplexed correctly with a faster stream
+func TestOrderingSlowReaders(t *testing.T) {
+	var (
+		pipeReader1, pipeWriter1 = io.Pipe()
+		pipeReader2, pipeWriter2 = io.Pipe()
+		reader                   = NewReader(
+			Options{},
+			Source{Reader: pipeReader1},
+			Source{Reader: pipeReader2},
+		)
+	)
+	go func() {
+		io.WriteString(pipeWriter1, line1)
+		io.WriteString(pipeWriter2, line1)
+		io.WriteString(pipeWriter2, line3)
+		time.Sleep(timeout / 2)
+		io.WriteString(pipeWriter1, line2)
+		pipeWriter1.Close()
+		pipeWriter2.Close()
+	}()
+	actual := readOneByteAtTheTime(reader, new(int))
+	expected := concatenatedStringsAsBytes(
+		line1,
+		line1,
+		line2,
+		line3,
+	)
+	if !reflect.DeepEqual(actual, expected) {
+		t.Errorf("`%v` read, `%v` expected", string(actual), string(expected))
+	}
+}
+
+// Verify that the aggregated stream does not wait for a stream which is so
+// slow to extract tokens that it exceeds the timeout
+func TestOrderingVerySlowReaders(t *testing.T) {
+	var (
+		pipeReader1, pipeWriter1 = io.Pipe()
+		pipeReader2, pipeWriter2 = io.Pipe()
+		reader                   = NewReader(
+			Options{},
+			Source{Reader: pipeReader1},
+			Source{Reader: pipeReader2},
+		)
+	)
+	go func() {
+		io.WriteString(pipeWriter1, line1)
+		io.WriteString(pipeWriter2, line1)
+		io.WriteString(pipeWriter2, line3)
+		// if the reader is very slow, ordering
+		// will not be guaranteed as we need to
+		// move on
+		time.Sleep(2 * timeout)
+		io.WriteString(pipeWriter1, line2)
+		pipeWriter1.Close()
+		pipeWriter2.Close()
+	}()
+	actual := readOneByteAtTheTime(reader, new(int))
+	expected := concatenatedStringsAsBytes(
+		line1,
+		line1,
+		line3,
+		line2,
+	)
+	if !reflect.DeepEqual(actual, expected) {
+		t.Errorf("`%v` read, `%v` expected", string(actual), string(expected))
+	}
+}
+
+// Check that a custom Split function can be set
 func TestCustomSplit(t *testing.T) {
 	var (
 		pipeReader, pipeWriter = io.Pipe()
@@ -308,6 +460,7 @@ func TestCustomSplit(t *testing.T) {
 	}
 }
 
+// Check that a custom Less function can be set
 func TestCustomLess(t *testing.T) {
 	var (
 		ByDescLenLess            = func(i, j []byte) bool { return len(i) > len(j) }
@@ -320,27 +473,18 @@ func TestCustomLess(t *testing.T) {
 		)
 	)
 	go func() {
-		// exercise the initial waiting by delaying token
-		// availability in the stream that should come first
-		time.Sleep(firstTimeout/2)
 		io.WriteString(pipeWriter1, line3)
-		io.WriteString(pipeWriter1, line1)
-		io.WriteString(pipeWriter1, line1)
-		pipeWriter1.Close()
-	}()
-	go func() {
-		io.WriteString(pipeWriter2, line4)
 		io.WriteString(pipeWriter2, line4)
 		io.WriteString(pipeWriter2, line2)
+		io.WriteString(pipeWriter1, line1)
+		pipeWriter1.Close()
 		pipeWriter2.Close()
 	}()
 	actual := readOneByteAtTheTime(reader, new(int))
 	expected := concatenatedStringsAsBytes(
 		line4,
-		line4,
 		line3,
 		line2,
-		line1,
 		line1,
 	)
 	if !reflect.DeepEqual(actual, expected) {
@@ -348,7 +492,8 @@ func TestCustomLess(t *testing.T) {
 	}
 }
 
-func TestCustomWriters(t *testing.T) {
+// Check that a custom Write function can be set
+func TestCustomWrites(t *testing.T) {
 	var (
 		pipeReader1, pipeWriter1 = io.Pipe()
 		Write1                   = func(dest io.Writer, token []byte) (n int, err error) {
@@ -365,12 +510,8 @@ func TestCustomWriters(t *testing.T) {
 		)
 	)
 	go func() {
-		// exercise the initial waiting by delaying token
-		// availability in the stream that should come first
 		io.WriteString(pipeWriter1, line1)
 		pipeWriter1.Close()
-	}()
-	go func() {
 		io.WriteString(pipeWriter2, line2)
 		pipeWriter2.Close()
 	}()
