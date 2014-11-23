@@ -88,11 +88,11 @@ func NewReader(options Options, sources ...Source) io.ReadCloser {
 			// extracted tokens, candidate for sorting/forwarding
 			sourceTokens = make([]sourceToken, 0, len(sources))
 
-			// the ids for the sources being actively scanned, which have previously returned a token within timeout
-			activeSourcesWithinTimeout = make(map[*Source]bool)
-
 			// the max duration we are willing to wait for tokens
 			blockMax = firstTimeout
+
+			// the one and only source after which we can move on if we receive a token from
+			criticalSource *Source
 		)
 		for scanning != 0 {
 			var (
@@ -114,26 +114,18 @@ func NewReader(options Options, sources ...Source) io.ReadCloser {
 							// candidate for being forwarded, put it in the list to be sorted
 							sourceTokens = append(sourceTokens, sourceToken)
 						}
-						if _, ok := activeSourcesWithinTimeout[sourceToken.source]; ok {
-							// that source won't be active until we trigger the semaphore again
-							delete(activeSourcesWithinTimeout, sourceToken.source)
-							if len(activeSourcesWithinTimeout) == 0 {
-								// at this point, there is no source actively scanning which
-								// did not already timeout so waiting more would mean that we
-								// effectively give them a higher timeout, and decrease the
-								// overall throughput, so just break out
-								stopWaiting = true
-							}
+						if criticalSource == sourceToken.source {
+							// no need to wait for another source, the other ones are either
+							// not scanning or were already given enough time
+							stopWaiting = true
 						}
 					}
 					scanning--
 				case <-timer:
-					// If we hit a timeout, that means all sources have been given
-					// the time to answer
-					activeSourcesWithinTimeout = make(map[*Source]bool)
 					stopWaiting = true
 				}
 			}
+			criticalSource = nil
 			if len(sourceTokens) > 0 {
 				// sort to get the token we want at the tail
 				sort.Sort(byTokenSort{less, &sourceTokens})
@@ -147,8 +139,8 @@ func NewReader(options Options, sources ...Source) io.ReadCloser {
 				}
 				// signal that we want more data from the source we got that token from
 				sourceToken.scanSemaphore <- struct{}{}
-				// which makes it a source actively scanning
-				activeSourcesWithinTimeout[sourceToken.source] = true
+				// which makes it the one and only critical source we need data from in the next select
+				criticalSource = sourceToken.source
 				scanning++
 			}
 			blockMax = timeout
