@@ -476,6 +476,47 @@ func TestTimeoutsAreBySource(t *testing.T) {
 	}
 }
 
+// Verify that a stream producing a token very late does not
+// affect ordering of the well-behaving sources
+func TestVerySlowReaderDoesNotPreemptOthers(t *testing.T) {
+	var (
+		pipeReader1, pipeWriter1 = io.Pipe()
+		pipeReader2, pipeWriter2 = io.Pipe()
+		pipeReader3, pipeWriter3 = io.Pipe()
+		reader                   = NewReader(
+			Options{},
+			Source{Reader: pipeReader1},
+			Source{Reader: pipeReader2},
+			Source{Reader: pipeReader3},
+		)
+	)
+	go func() {
+		io.WriteString(pipeWriter1, line1)
+		time.Sleep(timeout / 2)
+		io.WriteString(pipeWriter1, line2)
+		pipeWriter1.Close()
+	}()
+	go func() {
+		io.WriteString(pipeWriter2, line3)
+		pipeWriter2.Close()
+	}()
+	go func() {
+		time.Sleep(firstTimeout)
+		io.WriteString(pipeWriter3, line4)
+		pipeWriter3.Close()
+	}()
+	actual := readOneByteAtTheTime(reader, new(int))
+	expected := concatenatedStringsAsBytes(
+		line1,
+		line2,
+		line3,
+		line4,
+	)
+	if !reflect.DeepEqual(actual, expected) {
+		t.Errorf("`%v` read, `%v` expected", string(actual), string(expected))
+	}
+}
+
 // Check that a custom Split function can be set
 func TestCustomSplit(t *testing.T) {
 	var (
